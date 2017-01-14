@@ -1,0 +1,33 @@
+#!/bin/bash
+
+BASEDIR=$(dirname "$0")
+BUILD_DIR="$BASEDIR/build"
+SRC_DIR="$BASEDIR/src"
+
+function build() {
+    mkdir -p $BUILD_DIR
+    erlc -o $BUILD_DIR $SRC_DIR/*.erl
+}
+
+function run() {
+    shift
+    erl -pa $BUILD_DIR -noshell -run main main $@
+}
+
+case "$1" in
+    br)
+        build
+        run $@
+        ;;
+    build)
+        build
+        ;;
+    clean)
+        rm -Rf $BUILD_DIR
+        ;;
+    run)
+        run $@
+        ;;
+    *)
+        echo Unknown command $1
+esac
