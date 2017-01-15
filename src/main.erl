@@ -7,6 +7,7 @@ main() ->
 main(Args) ->
     extract(Args).
 
-extract(Filenames) ->
-    io:format("~p~n", [Filenames]),
+% Extract the archive named Filename and exit.
+extract([Filename]) ->
+    cbv:uncbv(Filename),
     erlang:halt().
