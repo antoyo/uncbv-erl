@@ -43,11 +43,71 @@ compression_flags(2#11) -> #compression_flags{compressed=true, huffman_encoded=t
 decode_filename(Bin) ->
     hd(binary:split(Bin, <<0>>)).
 
+% Decompress some bytes.
+decompress_bytes(0, _, Rest, Result) -> {Result, Rest};
+decompress_bytes(_, _, Bin, Result) when size(Bin) =:= 0 -> {Result, Bin};
+decompress_bytes(Count, CodeBytes, Bin, Acc) ->
+    NewCodeBytes = CodeBytes bsl 1,
+    NewCount = Count - 1,
+    if CodeBytes band 16#8000 =/= 0 ->
+           <<
+             High  : 4,
+             Low   : 4,
+             Byte1 : 8 / unsigned-integer,
+             Rest / binary
+           >> = Bin,
+           case High of
+               0 ->
+                   % Run-length decoding.
+                   Size = Low + 3,
+                   Bytes = binary:copy(Byte1, Size),
+                   NewAcc = << Acc/binary, Bytes/binary >>,
+                   decompress_bytes(NewCount, NewCodeBytes, Rest, NewAcc);
+               1 ->
+                   % Run-length decoding with bigger size.
+                   Size = Low + (Byte1 bsl 4) + 16#13,
+                   << Byte2:8, NewRest/binary >> = Rest,
+                   Bytes = binary:copy(Byte2, Size),
+                   NewAcc = << Acc/binary, Bytes/binary >>,
+                   decompress_bytes(NewCount, NewCodeBytes, NewRest, NewAcc);
+               _ ->
+                   % Copy content already seen in the file (backward reference).
+                   % Get the offset and the length.
+                   Offset = (Byte1 bsl 4) + Low + 3,
+                   {Size, NewBin} =
+                       case High of
+                           2 ->
+                               << Byte2:8, NewRest/binary >> = Rest,
+                               {Byte2 + 16#10, NewRest};
+                           _ -> {High, Rest}
+                       end,
+                   CurrentPosition = size(Acc),
+                   Start = CurrentPosition - Offset,
+                   BackwardReference = binary:part(Acc, Start, Size),
+                   NewAcc = << Acc/binary, BackwardReference/binary >>,
+                   decompress_bytes(NewCount, NewCodeBytes, NewBin, NewAcc)
+           end;
+       true ->
+           << Byte : 8, Rest / binary >> = Bin,
+           NewAcc = << Acc/binary, Byte >>,
+           decompress_bytes(NewCount, NewCodeBytes, Rest, NewAcc)
+    end.
+
 % Decompress a block.
 decompress_block(Bin) ->
-    erlang:error(unimplemented),
-    % TODO
-    Bin.
+    decompress_block(Bin, << >>).
+
+decompress_block(Bin, Result) when size(Bin) =:= 0 ->
+    Result;
+decompress_block(Bin, Result) ->
+    case Bin of
+        <<
+          CodeBytes : 16 / little-unsigned-integer,
+          Rest / binary
+        >> ->
+            {Bytes, NewRest} = decompress_bytes(16, CodeBytes, Rest, Result),
+            decompress_block(NewRest, Bytes)
+    end.
 
 % Extract, decode and decompress a block.
 extract_block(FileMetadata, Bin) ->
@@ -69,6 +129,7 @@ extract_block(FileMetadata, Bin) ->
 
 % Extract a file from the archive.
 extract_file(Filename, FileMetadata, Location) ->
+    file:delete(FileMetadata#file_metadata.filename),
     {ok, File} = file:open(Filename, [read, binary]),
     {ok, _} = file:position(File, Location),
     % TODO: refactor to avoid reading a whole (compressed) file into memory.
@@ -118,7 +179,9 @@ uncbv(Filename) ->
     {ok, FileListBin} = file:read(File, FileListSize),
     FileList = file_list(Header, FileListBin),
     file:close(File),
-    [FileMetadata|_] = FileList,
     HeaderSize = ?HEADER_LEN + FileListSize,
-    extract_file(Filename, FileMetadata, HeaderSize),
-    io:format("~p~n", [FileList]).
+    lists:foldl(
+      fun(FileMetadata, Pos) ->
+          extract_file(Filename, FileMetadata, Pos),
+          Pos + FileMetadata#file_metadata.compressed_size
+      end, HeaderSize, FileList).
