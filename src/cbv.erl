@@ -1,11 +1,14 @@
 -module(cbv).
 -export([uncbv/1]).
 
+-include("records.hrl").
+
 -define(FILE_COUNT_LEN, 16).
 -define(FILE_NAME_LEN, 132).
 -define(FILE_NAME_LEN_LEN, 8).
 -define(MAGIC_NUMBER_LEN, 16).
 -define(HEADER_LEN, (?MAGIC_NUMBER_LEN + ?FILE_COUNT_LEN + ?FILE_NAME_LEN_LEN + ?UNKNOWN_LEN) div 8).
+-define(TREE_SIZE, 256).
 -define(UNKNOWN_LEN, 24).
 
 -record(compression_flags, {compressed,
@@ -37,6 +40,17 @@ compression_flags(2#01) -> #compression_flags{compressed=true, huffman_encoded=f
 compression_flags(2#10) -> #compression_flags{compressed=false, huffman_encoded=true};
 compression_flags(2#11) -> #compression_flags{compressed=true, huffman_encoded=true}.
 
+% Create a Huffman tree from an array.
+create_huffman_tree(Array) ->
+    Fun =
+        fun(Value, Bits, Tree) ->
+            case Bits of
+                << >> -> Tree;
+                _ -> tree_insert(Bits, Value, Tree)
+            end
+        end,
+    array:foldl(Fun, nil, Array).
+
 % Decode a binary c-string to an Erlang binary string.
 decode_filename(Bin) ->
     hd(binary:split(Bin, <<0>>)).
@@ -48,6 +62,7 @@ decompress_bytes(Count, CodeBytes, Bin, Acc) ->
     NewCodeBytes = CodeBytes bsl 1,
     NewCount = Count - 1,
     if CodeBytes band 16#8000 =/= 0 ->
+           % The current byte is a coded byte.
            <<
              High  : 4,
              Low   : 4,
@@ -58,14 +73,14 @@ decompress_bytes(Count, CodeBytes, Bin, Acc) ->
                0 ->
                    % Run-length decoding.
                    Size = Low + 3,
-                   Bytes = binary:copy(Byte1, Size),
+                   Bytes = binary:copy(<< Byte1 >>, Size),
                    NewAcc = << Acc/binary, Bytes/binary >>,
                    decompress_bytes(NewCount, NewCodeBytes, Rest, NewAcc);
                1 ->
                    % Run-length decoding with bigger size.
                    Size = Low + (Byte1 bsl 4) + 16#13,
                    << Byte2:8, NewRest/binary >> = Rest,
-                   Bytes = binary:copy(Byte2, Size),
+                   Bytes = binary:copy(<< Byte2 >>, Size),
                    NewAcc = << Acc/binary, Bytes/binary >>,
                    decompress_bytes(NewCount, NewCodeBytes, NewRest, NewAcc);
                _ ->
@@ -158,10 +173,38 @@ header(<<
     #header{file_count=FileCount, filename_len=FileNameLen}.
 
 % Decode a huffman-encoded block.
-huffman(Bin) ->
-    erlang:error(unimplemented),
-    % TODO
-    Bin.
+huffman(<<
+          DecompressedSize : 16 / big-unsigned-integer,
+          Rest / binary
+        >>) ->
+    {Tree, Input} = huffman_tree(Rest),
+    huffman:decode(Input, Tree, DecompressedSize).
+
+% Decode a huffman tree.
+huffman_tree(Bin) ->
+    InitArray = array:new(?TREE_SIZE),
+    {Array, Input} = huffman_tree(0, Bin, InitArray),
+    {create_huffman_tree(Array), Input}.
+
+huffman_tree(256, Rest, Result) -> {Result, Rest};
+huffman_tree(Count,
+    <<
+      Len  : 4   / little-unsigned-integer,
+      Bits : Len / bitstring,
+      Rest       / bitstring
+    >>, Acc) ->
+    NewAcc = array:set(Count, Bits, Acc),
+    huffman_tree(Count + 1, Rest, NewAcc).
+
+% Insert a Value from Bits into the Tree.
+tree_insert(<< >>, Value, _) ->
+    #tree{value=Value};
+tree_insert(Bits, Value, nil) ->
+    tree_insert(Bits, Value, #tree{});
+tree_insert(<< 0:1, Bits/bitstring >>, Value, Tree) ->
+    Tree#tree { left = tree_insert(Bits, Value, Tree#tree.left) };
+tree_insert(<< 1:1, Bits/bitstring >>, Value, Tree) ->
+    Tree#tree { right = tree_insert(Bits, Value, Tree#tree.right) }.
 
 % Extract the archive named Filename.
 uncbv(Filename) ->
