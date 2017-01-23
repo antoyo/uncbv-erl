@@ -20,18 +20,16 @@
                 }).
 
 % Parse a compressed block.
-block(FileMetadata, Bin) ->
-    case Bin of
-        <<
-          BlockSize     : 16 / little-unsigned-integer,
-          _UnknownBytes : 16 / little-unsigned-integer,
-          Rest / binary
-        >> ->
-            CompressedBlock = binary:part(Rest, 0, BlockSize),
-            extract_block(FileMetadata, CompressedBlock),
-            Len = size(Rest) - BlockSize,
-            binary:part(Rest, BlockSize, Len)
-    end.
+block(FileMetadata,
+      <<
+        BlockSize     : 16 / little-unsigned-integer,
+        _UnknownBytes : 16 / little-unsigned-integer,
+        Rest / binary
+      >>) ->
+    CompressedBlock = binary:part(Rest, 0, BlockSize),
+    extract_block(FileMetadata, CompressedBlock),
+    Len = size(Rest) - BlockSize,
+    binary:part(Rest, BlockSize, Len).
 
 % Parse the compression flags.
 compression_flags(2#00) -> #compression_flags{compressed=false, huffman_encoded=false};
@@ -99,15 +97,13 @@ decompress_block(Bin) ->
 
 decompress_block(Bin, Result) when size(Bin) =:= 0 ->
     Result;
-decompress_block(Bin, Result) ->
-    case Bin of
-        <<
-          CodeBytes : 16 / little-unsigned-integer,
-          Rest / binary
-        >> ->
-            {Bytes, NewRest} = decompress_bytes(16, CodeBytes, Rest, Result),
-            decompress_block(NewRest, Bytes)
-    end.
+decompress_block(
+  <<
+    CodeBytes : 16 / little-unsigned-integer,
+    Rest / binary
+  >>, Result) ->
+    {Bytes, NewRest} = decompress_bytes(16, CodeBytes, Rest, Result),
+    decompress_block(NewRest, Bytes).
 
 % Extract, decode and decompress a block.
 extract_block(FileMetadata, Bin) ->
@@ -139,21 +135,18 @@ extract_file(Filename, FileMetadata, Location) ->
 
 % Parse the file list.
 file_list(Header, Bin) ->
-    parse:count(fun(Input) -> file_metadata(Header, Input) end, Header#header.file_count, Bin).
+    parse:count(fun(Input) -> file_metadata(Input) end, Header#header.file_count, Bin).
 
 % Parse the file metadata (name and sizes).
-file_metadata(Header, Bin) ->
-    RestSize = Header#header.filename_len - 2 * 4 - ?FILE_NAME_LEN,
-    case Bin of
-        <<
-          Filename         : ?FILE_NAME_LEN / binary,
-          CompressedSize   : 32 / little-unsigned-integer,
-          DecompressedSize : 32 / little-unsigned-integer,
-          _Rest            : RestSize / binary
-        >> ->
-            DecodedFilename = decode_filename(Filename),
-            #file_metadata{compressed_size=CompressedSize, decompressed_size=DecompressedSize, filename=DecodedFilename}
-    end.
+file_metadata(
+    <<
+      Filename         : ?FILE_NAME_LEN / binary,
+      CompressedSize   : 32 / little-unsigned-integer,
+      DecompressedSize : 32 / little-unsigned-integer,
+      _Rest / binary
+    >>) ->
+    DecodedFilename = decode_filename(Filename),
+    #file_metadata{compressed_size=CompressedSize, decompressed_size=DecompressedSize, filename=DecodedFilename}.
 
 % Parse a CBV file header.
 header(<<
