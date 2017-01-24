@@ -28,7 +28,7 @@ count(Parser, Count, Input) ->
         Parser(binary:part(Input, Cnt * Len, Len)) end, Counts).
 
 % Apply the `Parser` as many times as possible on the given `Input`.
-many(_, Input) when size(Input) =:= 0 ->
+many(_, << >>) ->
     ok;
 many(Parser, Input) ->
     NewInput = Parser(Input),

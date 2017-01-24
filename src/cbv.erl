@@ -76,7 +76,7 @@ decode_filename(Bin) ->
 
 % Decompress some bytes.
 decompress_bytes(0, _, Rest, Result) -> {Result, Rest};
-decompress_bytes(_, _, Bin, Result) when size(Bin) =:= 0 -> {Result, Bin};
+decompress_bytes(_, _, << >>, Result) -> {Result, << >>};
 decompress_bytes(Count, CodeBytes, Bin, Acc) ->
     NewCodeBytes = CodeBytes bsl 1,
     NewCount = Count - 1,
@@ -129,7 +129,7 @@ decompress_bytes(Count, CodeBytes, Bin, Acc) ->
 decompress_block(Bin) ->
     decompress_block(Bin, << >>).
 
-decompress_block(Bin, Result) when size(Bin) =:= 0 ->
+decompress_block(<< >>, Result) ->
     Result;
 decompress_block(
   <<
